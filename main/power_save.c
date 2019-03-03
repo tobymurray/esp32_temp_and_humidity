@@ -1,17 +1,3 @@
-/* Power save Example
-
- This example code is in the Public Domain (or CC0 licensed, at your option.)
-
- Unless required by applicable law or agreed to in writing, this
- software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.
- */
-
-/*
- this example shows how to use power save mode
- set a router or a AP using the same SSID&PASSWORD as configuration of this example.
- start esp32 and when it connected to AP it will enter power save mode
- */
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
@@ -194,6 +180,9 @@ static void mqtt_app_start(void)
     esp_mqtt_client_start(client);
 }
 
+/*
+ * Didn't look too closely at what this stuff does, copied it from the power_save example
+ */
 void start_up_stuff() {
 	// Initialize NVS
 	esp_err_t storage_init = nvs_flash_init();
