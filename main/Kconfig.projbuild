@@ -20,6 +20,16 @@ menu "Example Configuration"
             For example, if beacon interval is 100 ms and listen interval is 3, the interval for station to listen
             to beacon is 300 ms.
 
+    config BROKER_URL
+        string "Broker URL"
+        default "mqtt://iot.eclipse.org"
+        help
+            URL of the broker to connect to
+
+    config BROKER_URL_FROM_STDIN
+        bool
+        default y if BROKER_URL = "FROM_STDIN"
+
     choice POWER_SAVE_MODE
         prompt "power save mode"
         default POWER_SAVE_MIN_MODEM
