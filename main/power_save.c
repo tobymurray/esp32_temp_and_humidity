@@ -24,6 +24,13 @@
 
 #include "mqtt_client.h"
 
+#include "driver/gpio.h"
+
+#include "dht.h"
+
+#include "soc/timer_group_struct.h"
+#include "soc/timer_group_reg.h"
+
 /*set the ssid and password via "make menuconfig"*/
 #define DEFAULT_SSID CONFIG_WIFI_SSID
 #define DEFAULT_PWD CONFIG_WIFI_PASSWORD
@@ -40,9 +47,17 @@
 #define DEFAULT_PS_MODE WIFI_PS_NONE
 #endif /*CONFIG_POWER_SAVE_MODEM*/
 
+#define ESP_INTR_FLAG_DEFAULT 0
+
 static const char *TAG = "power_save";
 static EventGroupHandle_t wifi_event_group;
 const static int CONNECTED_BIT = BIT0;
+
+// Throttle sensor reads to avoid polling too frequently
+const unsigned int MIN_SENSOR_READ_MILLIS = 2500;
+
+
+esp_mqtt_client_handle_t client;
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event) {
 	esp_mqtt_client_handle_t client = event->client;
@@ -176,7 +191,7 @@ static void mqtt_app_start(void)
     }
 #endif /* CONFIG_BROKER_URL_FROM_STDIN */
 
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_start(client);
 }
 
@@ -207,8 +222,12 @@ void start_up_stuff() {
 #endif // CONFIG_PM_ENABLE
 }
 
+unsigned long IRAM_ATTR millis() {
+	return (unsigned long) (esp_timer_get_time() / 1000ULL);
+}
+
 void app_main() {
-  ESP_LOGI(TAG, "[APP] Startup..");
+	ESP_LOGI(TAG, "[APP] Startup..");
 	ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
 	ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
 
@@ -224,4 +243,31 @@ void app_main() {
 	mqtt_app_start();
 
 	ESP_LOGI(TAG, "Everything is all set up.");
+
+	unsigned long currentMillis;
+	unsigned long lastSensorReadMillis;
+
+	gpio_set_pull_mode(GPIO_NUM_27, GPIO_PULLUP_DISABLE);
+	gpio_set_pull_mode(GPIO_NUM_27, GPIO_PULLDOWN_ENABLE);
+	gpio_set_direction(GPIO_NUM_27, GPIO_MODE_OUTPUT);
+
+	char buffer[50];
+
+	while (1) {
+		currentMillis = millis();
+		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS) {
+			lastSensorReadMillis = currentMillis;
+			Reading reading = readPin((uint8_t) 27);
+			if (reading.status != -2) {
+				ESP_LOGI(TAG, "Reading: Status %d Humidity: %f Temperature: %f", reading.status, reading.humidity, reading.temperature);
+				snprintf(buffer, 6, "%.2f", reading.humidity);
+				esp_mqtt_client_publish(client, "/humidity", buffer, 0, 1, 0);
+				snprintf(buffer, 6, "%.2f", reading.temperature);
+				esp_mqtt_client_publish(client, "/temperature", buffer, 0, 1, 0);
+			}
+		}
+		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
+		TIMERG0.wdt_feed = 1;
+		TIMERG0.wdt_wprotect = 0;
+	}
 }
