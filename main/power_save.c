@@ -33,6 +33,8 @@
 #include "soc/timer_group_struct.h"
 #include "soc/timer_group_reg.h"
 
+#include "cJSON.h"
+
 /*set the ssid and password via "make menuconfig"*/
 #define DEFAULT_SSID CONFIG_WIFI_SSID
 #define DEFAULT_PWD CONFIG_WIFI_PASSWORD
@@ -57,6 +59,14 @@ const static int CONNECTED_BIT = BIT0;
 
 // Throttle sensor reads to avoid polling too frequently
 const unsigned int MIN_SENSOR_READ_MILLIS = 2500;
+
+typedef struct MqttMessage {
+  char topic[128];
+  char body[128];
+  bool retained;
+} MqttMessage;
+
+MqttMessage mqttMessage;
 
 static void obtain_time(void);
 static void initialize_sntp(void);
@@ -246,35 +256,36 @@ static void obtain_time(void) {
 		time(&now);
 		localtime_r(&now, &timeinfo);
 	}
+
+	// Set timezone to Eastern Standard Time and print local time
+	setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
+	tzset();
 }
 
 static void initialize_sntp(void) {
 	ESP_LOGI(TAG, "Initializing SNTP");
 	sntp_setoperatingmode(SNTP_OPMODE_POLL);
-	sntp_setservername(0, "pool.ntp.org");
+	sntp_setservername(0, "ca.pool.ntp.org");
 	sntp_init();
 }
 
-void time_stuff() {
+void get_time(struct tm * timeinfo) {
 	time_t now;
-	struct tm timeinfo;
 	time(&now);
-	localtime_r(&now, &timeinfo);
+	localtime_r(&now, timeinfo);
 	// Is time set? If not, tm_year will be (1970 - 1900).
-	if (timeinfo.tm_year < (2019 - 1900)) {
+	if (timeinfo->tm_year < (2019 - 1900)) {
 		ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
 		obtain_time();
 		// update 'now' variable with current time
 		time(&now);
 	}
-	char strftime_buf[64];
 
-	// Set timezone to Eastern Standard Time and print local time
-	setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
-	tzset();
-	localtime_r(&now, &timeinfo);
-	strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-	ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
+	localtime_r(&now, timeinfo);
+}
+
+void publish_mqtt_message(MqttMessage message) {
+	esp_mqtt_client_publish(client, message.topic, message.body, 0, 1, message.retained);
 }
 
 void app_main() {
@@ -295,26 +306,57 @@ void app_main() {
 
 	ESP_LOGI(TAG, "Everything is all set up.");
 
+	struct tm timeinfo;
+
+	// Invoke initially to set up SNTP
+	get_time(&timeinfo);
+	char strftime_buf[64];
+
+	char measurement[6];
+
 	unsigned long currentMillis;
 	unsigned long lastSensorReadMillis = 0;
-
-	time_stuff();
-
-	char buffer[50];
-
+	unsigned long lastMemoryReport = 0;
 	while (1) {
 		currentMillis = millis();
 		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS) {
 			lastSensorReadMillis = currentMillis;
+			get_time(&timeinfo);
+			ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
+
 			Reading reading = readPin((uint8_t) 27);
 			if (reading.status != -2) {
+				cJSON * root = cJSON_CreateObject();
+				strftime(strftime_buf, sizeof(strftime_buf), "%FT%T%Z", &timeinfo);
+				cJSON_AddItemToObject(root, "timestamp", cJSON_CreateString(strftime_buf));
+
+				strncpy(mqttMessage.topic, "/humidity", sizeof("/humidity"));
+				snprintf(measurement, 6, "%.2f", reading.humidity);
+				cJSON_AddItemToObject(root, "relative_humidity", cJSON_CreateString(measurement));
+				cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
+				cJSON_DeleteItemFromObject(root, "relative_humidity");
+				publish_mqtt_message(mqttMessage);
+
+				strncpy(mqttMessage.topic, "/temperature", sizeof("/temperature"));
+				snprintf(measurement, 6, "%.2f", reading.temperature);
+				cJSON_AddItemToObject(root, "temperature", cJSON_CreateString(measurement));
+				cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
+				publish_mqtt_message(mqttMessage);
+
+				cJSON_Delete(root);
 				ESP_LOGI(TAG, "Reading: Status %d Humidity: %f Temperature: %f", reading.status, reading.humidity, reading.temperature);
-				snprintf(buffer, 6, "%.2f", reading.humidity);
-				esp_mqtt_client_publish(client, "/humidity", buffer, 0, 1, 0);
-				snprintf(buffer, 6, "%.2f", reading.temperature);
-				esp_mqtt_client_publish(client, "/temperature", buffer, 0, 1, 0);
 			}
 		}
+
+		if (currentMillis - lastMemoryReport >= 10000) {
+			lastMemoryReport = currentMillis;
+			strncpy(mqttMessage.topic, "/free_heap", sizeof("/free_heap"));
+			sprintf(mqttMessage.body, "%u", xPortGetFreeHeapSize());
+
+			publish_mqtt_message(mqttMessage);
+		}
+
+
 		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
 		TIMERG0.wdt_feed = 1;
 		TIMERG0.wdt_wprotect = 0;
