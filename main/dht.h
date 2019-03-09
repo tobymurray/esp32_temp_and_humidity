@@ -1,5 +1,9 @@
-#ifndef dhtnew_h
-#define dhtnew_h
+/*
+ * Taken from: https://github.com/RobTillaart/Arduino/tree/master/libraries/DHTNEW and modified to suit my needs (e.g. native C instead of using Arduino)
+ */
+
+#ifndef dht_h
+#define dht_h
 
 #define DHTLIB_OK                0
 #define DHTLIB_ERROR_CHECKSUM   -1

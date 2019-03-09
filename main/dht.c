@@ -1,3 +1,7 @@
+/*
+ * Taken from: https://github.com/RobTillaart/Arduino/tree/master/libraries/DHTNEW and modified to suit my needs (e.g. native C instead of using Arduino)
+ */
+
 #include "dht.h"
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
@@ -27,12 +31,18 @@ static const char *DHT_TAG = "dht";
 uint8_t _bits[5];  // buffer to receive data
 int _readSensor(uint8_t pin);
 
+/*
+ * For some reason, gpio_config doesn't seem to work here. Interactions with the sensor start timing out.
+ */
 void pinModeInput(uint8_t pin) {
 	gpio_set_pull_mode(pin, GPIO_PULLUP_ENABLE);
 	gpio_set_pull_mode(pin, GPIO_PULLDOWN_DISABLE);
 	gpio_set_direction(pin, GPIO_MODE_INPUT);
 }
 
+/*
+ * For some reason, gpio_config doesn't seem to work here. Interactions with the sensor start timing out.
+ */
 void pinModeOutput(uint8_t pin) {
 	gpio_set_pull_mode(pin, GPIO_PULLUP_DISABLE);
 	gpio_set_pull_mode(pin, GPIO_PULLDOWN_ENABLE);
@@ -110,10 +120,10 @@ Reading readPin(uint8_t pin) {
 	reading.humidity = (_bits[0] * 256 + _bits[1]) * 0.1;
 	reading.temperature = ((_bits[2] & 0x7F) * 256 + _bits[3]) * 0.1;
 
-	if (_bits[2] & 0x80)  // negative temperature
-			{
+	if (_bits[2] & 0x80) { // negative temperature
 		reading.temperature = -reading.temperature;
 	}
+
 	reading.humidity += _humOffset;       // check overflow ???
 	reading.temperature += _tempOffset;
 
@@ -177,8 +187,10 @@ int _readSensor(uint8_t pin) {
 
 		loopCnt = DHTLIB_TIMEOUT;
 		while (gpio_get_level(pin) == HIGH) {
-			ESP_LOGI(DHT_TAG, "Timed out while waiting for sensor to pull low after data transmission");
-			if (--loopCnt == 0) return DHTLIB_ERROR_TIMEOUT;
+			if (--loopCnt == 0) {
+				ESP_LOGI(DHT_TAG, "Timed out while waiting for sensor to pull low after data transmission");
+				return DHTLIB_ERROR_TIMEOUT;
+			}
 		}
 
 		if ((micros() - t) > 40) {
