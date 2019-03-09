@@ -21,6 +21,8 @@
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
 #include "lwip/netdb.h"
+#include "lwip/err.h"
+#include "lwip/apps/sntp.h"
 
 #include "mqtt_client.h"
 
@@ -56,6 +58,9 @@ const static int CONNECTED_BIT = BIT0;
 // Throttle sensor reads to avoid polling too frequently
 const unsigned int MIN_SENSOR_READ_MILLIS = 2500;
 
+static void obtain_time(void);
+static void initialize_sntp(void);
+
 
 esp_mqtt_client_handle_t client;
 
@@ -90,7 +95,7 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event) {
 		ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
 		break;
 	case MQTT_EVENT_PUBLISHED:
-		ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+		ESP_LOGD(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
 		break;
 	case MQTT_EVENT_DATA:
 		ESP_LOGI(TAG, "MQTT_EVENT_DATA");
@@ -226,6 +231,52 @@ unsigned long IRAM_ATTR millis() {
 	return (unsigned long) (esp_timer_get_time() / 1000ULL);
 }
 
+static void obtain_time(void) {
+	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	initialize_sntp();
+
+	// wait for time to be set
+	time_t now = 0;
+	struct tm timeinfo = { 0 };
+	int retry = 0;
+	const int retry_count = 10;
+	while (timeinfo.tm_year < (2019 - 1900) && ++retry < retry_count) {
+		ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+		vTaskDelay(2000 / portTICK_PERIOD_MS);
+		time(&now);
+		localtime_r(&now, &timeinfo);
+	}
+}
+
+static void initialize_sntp(void) {
+	ESP_LOGI(TAG, "Initializing SNTP");
+	sntp_setoperatingmode(SNTP_OPMODE_POLL);
+	sntp_setservername(0, "pool.ntp.org");
+	sntp_init();
+}
+
+void time_stuff() {
+	time_t now;
+	struct tm timeinfo;
+	time(&now);
+	localtime_r(&now, &timeinfo);
+	// Is time set? If not, tm_year will be (1970 - 1900).
+	if (timeinfo.tm_year < (2019 - 1900)) {
+		ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+		obtain_time();
+		// update 'now' variable with current time
+		time(&now);
+	}
+	char strftime_buf[64];
+
+	// Set timezone to Eastern Standard Time and print local time
+	setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
+	tzset();
+	localtime_r(&now, &timeinfo);
+	strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+	ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
+}
+
 void app_main() {
 	ESP_LOGI(TAG, "[APP] Startup..");
 	ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
@@ -245,11 +296,9 @@ void app_main() {
 	ESP_LOGI(TAG, "Everything is all set up.");
 
 	unsigned long currentMillis;
-	unsigned long lastSensorReadMillis;
+	unsigned long lastSensorReadMillis = 0;
 
-	gpio_set_pull_mode(GPIO_NUM_27, GPIO_PULLUP_DISABLE);
-	gpio_set_pull_mode(GPIO_NUM_27, GPIO_PULLDOWN_ENABLE);
-	gpio_set_direction(GPIO_NUM_27, GPIO_MODE_OUTPUT);
+	time_stuff();
 
 	char buffer[50];
 
