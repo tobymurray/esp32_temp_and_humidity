@@ -76,6 +76,9 @@ typedef struct MqttMessage {
 
 MqttMessage mqttMessage;
 TaskHandle_t stepperTask;
+static struct tm timeinfo;
+static char strftime_buf[64];
+static char measurement[6];
 
 static void obtain_time(void);
 static void initialize_sntp(void);
@@ -356,6 +359,29 @@ char * task_state_to_string(eTaskState taskState) {
 	return "UNKNOWN STATE!";
 }
 
+void publish_reading(uint8_t pin, Reading reading) {
+	get_time(&timeinfo);
+	strftime(strftime_buf, 64, "%FT%T%Z", &timeinfo);
+	cJSON * root = cJSON_CreateObject();
+	cJSON_AddItemToObject(root, "timestamp", cJSON_CreateString(strftime_buf));
+
+	sprintf(mqttMessage.topic, "humidity/%d", pin);
+	snprintf(measurement, 6, "%.2f", reading.humidity);
+	cJSON_AddItemToObject(root, "relative_humidity", cJSON_CreateString(measurement));
+	cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
+	cJSON_DeleteItemFromObject(root, "relative_humidity");
+	publish_mqtt_message(mqttMessage);
+
+	sprintf(mqttMessage.topic, "temperature/%d", pin);
+	snprintf(measurement, 6, "%.2f", reading.temperature);
+	cJSON_AddItemToObject(root, "temperature", cJSON_CreateString(measurement));
+	cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
+	publish_mqtt_message(mqttMessage);
+
+	cJSON_Delete(root);
+	ESP_LOGI(TAG, "Reading: Status %d Humidity: %f Temperature: %f", reading.status, reading.humidity, reading.temperature);
+}
+
 void app_main() {
 	ESP_LOGI(TAG, "[APP] Startup..");
 	ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
@@ -374,51 +400,42 @@ void app_main() {
 
 	ESP_LOGI(TAG, "Everything is all set up.");
 
-	struct tm timeinfo;
-
 	set_up(pins);
 
 	// Invoke initially to set up SNTP
 	get_time(&timeinfo);
-	char strftime_buf[64];
-
-	char measurement[6];
 
 	unsigned long currentMillis;
 	unsigned long lastSensorReadMillis = 0;
 	unsigned long lastMemoryReport = 0;
 	unsigned long lastTaskReport = 0;
 
-	xTaskCreate(vTaskCode, "ROTATE_EGGS", 8192, NULL, tskIDLE_PRIORITY, &stepperTask);
+	xTaskCreate(vTaskCode, "ROTATE_EGGS", 3072, NULL, 1, &stepperTask);
+	Reading reading;
 
 	while (1) {
 		currentMillis = millis();
-		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS) {
+		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS * 2) {
 			lastSensorReadMillis = currentMillis;
-			get_time(&timeinfo);
-			ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
 
-			Reading reading = readPin((uint8_t) 27);
+			reading = readPin(GPIO_NUM_26);
 			if (reading.status != -2) {
-				cJSON * root = cJSON_CreateObject();
-				strftime(strftime_buf, sizeof(strftime_buf), "%FT%T%Z", &timeinfo);
-				cJSON_AddItemToObject(root, "timestamp", cJSON_CreateString(strftime_buf));
+				publish_reading(GPIO_NUM_26, reading);
+			}
 
-				strncpy(mqttMessage.topic, "/humidity", sizeof("/humidity"));
-				snprintf(measurement, 6, "%.2f", reading.humidity);
-				cJSON_AddItemToObject(root, "relative_humidity", cJSON_CreateString(measurement));
-				cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
-				cJSON_DeleteItemFromObject(root, "relative_humidity");
-				publish_mqtt_message(mqttMessage);
+			reading = readPin(GPIO_NUM_27);
+			if (reading.status != -2) {
+				publish_reading(GPIO_NUM_27, reading);
+			}
 
-				strncpy(mqttMessage.topic, "/temperature", sizeof("/temperature"));
-				snprintf(measurement, 6, "%.2f", reading.temperature);
-				cJSON_AddItemToObject(root, "temperature", cJSON_CreateString(measurement));
-				cJSON_PrintPreallocated(root, mqttMessage.body, 128, false);
-				publish_mqtt_message(mqttMessage);
+			reading = readPin(GPIO_NUM_25);
+			if (reading.status != -2) {
+				publish_reading(GPIO_NUM_25, reading);
+			}
 
-				cJSON_Delete(root);
-				ESP_LOGI(TAG, "Reading: Status %d Humidity: %f Temperature: %f", reading.status, reading.humidity, reading.temperature);
+			reading = readPin(GPIO_NUM_33);
+			if (reading.status != -2) {
+				publish_reading(GPIO_NUM_33, reading);
 			}
 		}
 
@@ -433,13 +450,12 @@ void app_main() {
 		if (currentMillis - lastTaskReport >= 60000) {
 			lastTaskReport = currentMillis;
 			eTaskState stepperTaskState = eTaskGetState(stepperTask);
-			ESP_LOGI(TAG, "The task state is: %s", task_state_to_string(stepperTaskState));
+			UBaseType_t highWaterMark = uxTaskGetStackHighWaterMark(stepperTask);
+			ESP_LOGI(TAG, "The task state is: %s with a high water mark of %d used", task_state_to_string(stepperTaskState), 8192 - highWaterMark);
 		}
 
 		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
 		TIMERG0.wdt_feed = 1;
 		TIMERG0.wdt_wprotect = 0;
 	}
-
-
 }
