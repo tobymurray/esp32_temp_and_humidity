@@ -444,30 +444,60 @@ void app_main() {
 	xTaskCreate(vTaskMonitorHeap, "MONITOR_HEAP", 3072, NULL, 1, NULL);
 
 	Reading reading;
+	Reading averageReading;
 
 	while (1) {
 		currentMillis = millis();
 		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS * 2) {
 			lastSensorReadMillis = currentMillis;
 
+			int num_samples = 0;
+			averageReading.temperature = 0;
+			averageReading.humidity = 0;
+
 			reading = readPin(GPIO_NUM_26);
-			if (reading.status != -2) {
+			if (reading.status == DHTLIB_OK) {
 				publish_reading(GPIO_NUM_26, reading);
+				num_samples++;
+				averageReading.status = DHTLIB_OK;
+				averageReading.temperature += reading.temperature;
+				averageReading.humidity += reading.humidity;
 			}
 
 			reading = readPin(GPIO_NUM_27);
-			if (reading.status != -2) {
+			if (reading.status == DHTLIB_OK) {
 				publish_reading(GPIO_NUM_27, reading);
+				num_samples++;
+				averageReading.status = DHTLIB_OK;
+				averageReading.temperature += reading.temperature;
+				averageReading.humidity += reading.humidity;
 			}
 
 			reading = readPin(GPIO_NUM_25);
-			if (reading.status != -2) {
+			if (reading.status == DHTLIB_OK) {
 				publish_reading(GPIO_NUM_25, reading);
+				num_samples++;
+				averageReading.status = DHTLIB_OK;
+				averageReading.temperature += reading.temperature;
+				averageReading.humidity += reading.humidity;
 			}
 
 			reading = readPin(GPIO_NUM_33);
-			if (reading.status != -2) {
+			if (reading.status == DHTLIB_OK) {
 				publish_reading(GPIO_NUM_33, reading);
+				num_samples++;
+				averageReading.status = DHTLIB_OK;
+				averageReading.temperature += reading.temperature;
+				averageReading.humidity += reading.humidity;
+			}
+
+			if (num_samples > 0) {
+				averageReading.temperature /= num_samples;
+				averageReading.humidity /= num_samples;
+				publish_reading(255, averageReading);
+				ESP_LOGI(TAG, "The average (over %d samples) is: %.2f%cC and %.2f%%", num_samples, averageReading.temperature, 0x00B0, averageReading.humidity);
+			} else {
+				averageReading.status = DHTLIB_INVALID_VALUE;
 			}
 		}
 
@@ -475,7 +505,7 @@ void app_main() {
 			lastTaskReport = currentMillis;
 			eTaskState stepperTaskState = eTaskGetState(stepperTask);
 			UBaseType_t highWaterMark = uxTaskGetStackHighWaterMark(stepperTask);
-			ESP_LOGI(TAG, "The task state is: %s with a high water mark of %d used", task_state_to_string(stepperTaskState), 8192 - highWaterMark);
+			ESP_LOGI(TAG, "The task state is: %s with a high water mark of %d used", task_state_to_string(stepperTaskState), 3072 - highWaterMark);
 		}
 
 		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
