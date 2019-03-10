@@ -302,7 +302,6 @@ void publish_mqtt_message(MqttMessage message) {
 	esp_mqtt_client_publish(client, message.topic, message.body, 0, 1, message.retained);
 }
 
-// Task to be created.
 void vTaskCode(void * pvParameters) {
 	unsigned long currentMillis;
 	unsigned long lastRotation = 0;
@@ -338,6 +337,38 @@ void vTaskCode(void * pvParameters) {
 			publish_mqtt_message(message);
 			delay(10 * 1000);
 			ESP_LOGI(TAG, "Delay over");
+		}
+	}
+}
+
+void vTaskMonitorHeap(void * pvParameters) {
+	unsigned long currentMillis;
+	unsigned long lastReport = 0;
+	MqttMessage message;
+	strncpy(message.topic, "heap", sizeof("heap"));
+	message.retained = true;
+
+	struct tm timeinfo;
+	char strftime_buf[64];
+	char free_heap_buffer[32];
+
+	cJSON * root = cJSON_CreateObject();
+	cJSON_AddItemToObject(root, "free_heap", cJSON_CreateString("initialized"));
+	cJSON_AddItemToObject(root, "timestamp", cJSON_CreateString("initialized"));
+
+	while (1) {
+		currentMillis = millis();
+		if (currentMillis - lastReport >= 60 * 1000) {
+			lastReport = currentMillis;
+
+			get_time(&timeinfo);
+			strftime(strftime_buf, sizeof(strftime_buf), "%FT%T%Z", &timeinfo);
+			cJSON_ReplaceItemInObject(root, "timestamp", cJSON_CreateString(strftime_buf));
+
+			sprintf(free_heap_buffer, "%u", xPortGetFreeHeapSize());
+			cJSON_ReplaceItemInObject(root, "free_heap", cJSON_CreateString(free_heap_buffer));
+			cJSON_PrintPreallocated(root, message.body, 128, false);
+			publish_mqtt_message(message);
 		}
 	}
 }
@@ -407,10 +438,11 @@ void app_main() {
 
 	unsigned long currentMillis;
 	unsigned long lastSensorReadMillis = 0;
-	unsigned long lastMemoryReport = 0;
 	unsigned long lastTaskReport = 0;
 
-	xTaskCreate(vTaskCode, "ROTATE_EGGS", 3072, NULL, 1, &stepperTask);
+	xTaskCreate(vTaskCode, "ROTATE_EGGS", 3072, NULL, 2, &stepperTask);
+	xTaskCreate(vTaskMonitorHeap, "MONITOR_HEAP", 3072, NULL, 1, NULL);
+
 	Reading reading;
 
 	while (1) {
@@ -437,14 +469,6 @@ void app_main() {
 			if (reading.status != -2) {
 				publish_reading(GPIO_NUM_33, reading);
 			}
-		}
-
-		if (currentMillis - lastMemoryReport >= 60000) {
-			lastMemoryReport = currentMillis;
-			strncpy(mqttMessage.topic, "/free_heap", sizeof("/free_heap"));
-			sprintf(mqttMessage.body, "%u", xPortGetFreeHeapSize());
-
-			publish_mqtt_message(mqttMessage);
 		}
 
 		if (currentMillis - lastTaskReport >= 60000) {
