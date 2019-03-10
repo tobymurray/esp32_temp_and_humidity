@@ -94,6 +94,7 @@ Reading readPin(uint8_t pin) {
 	// TEST CHECKSUM
 	uint8_t sum = _bits[0] + _bits[1] + _bits[2] + _bits[3];
 	if (_bits[4] != sum) {
+		ESP_LOGW(DHT_TAG, "Checksum failed!");
 		reading.status = DHTLIB_ERROR_CHECKSUM;
 	}
 
@@ -124,7 +125,7 @@ int _readSensor(uint8_t pin) {
 	uint16_t loopCnt = DHTLIB_TIMEOUT;
 	while (gpio_get_level(pin) == LOW) {
 		if (--loopCnt == 0) {
-			ESP_LOGI(DHT_TAG, "Failed while waiting for acknowledgement (sensor didn't pull high)");
+			ESP_LOGW(DHT_TAG, "Failed while waiting for acknowledgement (sensor didn't pull high)");
 			return DHTLIB_ERROR_TIMEOUT;
 		}
 	}
@@ -132,7 +133,7 @@ int _readSensor(uint8_t pin) {
 	loopCnt = DHTLIB_TIMEOUT;
 	while (gpio_get_level(pin) == HIGH) {
 		if (--loopCnt == 0) {
-			ESP_LOGI(DHT_TAG, "Failed while waiting for sensor response (sensor stayed high)");
+			ESP_LOGW(DHT_TAG, "Failed while waiting for sensor response (sensor stayed high)");
 			return DHTLIB_ERROR_TIMEOUT;
 		}
 	}
@@ -142,7 +143,7 @@ int _readSensor(uint8_t pin) {
 		loopCnt = DHTLIB_TIMEOUT;
 		while (gpio_get_level(pin) == LOW) {
 			if (--loopCnt == 0) {
-				ESP_LOGI(DHT_TAG, "Failed while reading data");
+				ESP_LOGW(DHT_TAG, "Failed while reading data");
 				return DHTLIB_ERROR_TIMEOUT;
 			}
 		}
@@ -152,7 +153,7 @@ int _readSensor(uint8_t pin) {
 		loopCnt = DHTLIB_TIMEOUT;
 		while (gpio_get_level(pin) == HIGH) {
 			if (--loopCnt == 0) {
-				ESP_LOGI(DHT_TAG, "Timed out while waiting for sensor to pull low after data transmission");
+				ESP_LOGW(DHT_TAG, "Timed out while waiting for sensor to pull low after data transmission");
 				return DHTLIB_ERROR_TIMEOUT;
 			}
 		}

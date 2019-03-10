@@ -75,6 +75,7 @@ typedef struct MqttMessage {
 } MqttMessage;
 
 MqttMessage mqttMessage;
+TaskHandle_t stepperTask;
 
 static void obtain_time(void);
 static void initialize_sntp(void);
@@ -246,7 +247,13 @@ void start_up_stuff() {
 }
 
 static void obtain_time(void) {
-	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	ESP_LOGI(TAG, "Waiting in 'obtain_time' for Wi-Fi to be connected");
+	EventBits_t bits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	if ((bits & CONNECTED_BIT) == 0) {
+		ESP_LOGE(TAG, "Wi-Fi is not connected, failed to obtain_time");
+	} else {
+		ESP_LOGI(TAG, "    Wi-Fi is connected!");
+	}
 	initialize_sntp();
 
 	// wait for time to be set
@@ -297,17 +304,25 @@ void vTaskCode(void * pvParameters) {
 	unsigned long currentMillis;
 	unsigned long lastRotation = 0;
 	MqttMessage message;
+	strncpy(message.topic, "/stepper", sizeof("/stepper"));
+	message.retained = true;
+
+	struct tm timeinfo;
+	char strftime_buf[64];
 
 	cJSON * root = cJSON_CreateObject();
 	cJSON_AddItemToObject(root, "status", cJSON_CreateString("initialized"));
+	cJSON_AddItemToObject(root, "timestamp", cJSON_CreateString("initialized"));
 
 	while (1) {
 		currentMillis = millis();
 		if (currentMillis - lastRotation >= 10000) {
 			lastRotation = currentMillis;
 
+			get_time(&timeinfo);
+			strftime(strftime_buf, sizeof(strftime_buf), "%FT%T%Z", &timeinfo);
+			cJSON_ReplaceItemInObject(root, "timestamp", cJSON_CreateString(strftime_buf));
 
-			strncpy(message.topic, "/stepper", sizeof("/stepper"));
 			cJSON_ReplaceItemInObject(root, "status", cJSON_CreateString("turning"));
 			cJSON_PrintPreallocated(root, message.body, 128, false);
 			publish_mqtt_message(message);
@@ -322,6 +337,23 @@ void vTaskCode(void * pvParameters) {
 			ESP_LOGI(TAG, "Delay over");
 		}
 	}
+}
+
+char * task_state_to_string(eTaskState taskState) {
+	switch (taskState) {
+	case eRunning: /*!< A task is querying the state of itself, so must be running. */
+		return "running";
+	case eReady: /*!< The task being queried is in a read or pending ready list. */
+		return "ready";
+	case eBlocked: /*!< The task being queried is in the Blocked state. */
+		return "blocked";
+	case eSuspended: /*!< The task being queried is in the Suspended state, or is in the Blocked state with an infinite time out. */
+		return "suspended";
+	case eDeleted: /*!< The task being queried has been deleted, but its TCB has not yet been freed. */
+		return "deleted";
+	}
+
+	return "UNKNOWN STATE!";
 }
 
 void app_main() {
@@ -355,8 +387,9 @@ void app_main() {
 	unsigned long currentMillis;
 	unsigned long lastSensorReadMillis = 0;
 	unsigned long lastMemoryReport = 0;
+	unsigned long lastTaskReport = 0;
 
-	xTaskCreate(vTaskCode, "ROTATE_EGGS", 4096, NULL, tskIDLE_PRIORITY, NULL);
+	xTaskCreate(vTaskCode, "ROTATE_EGGS", 8192, NULL, tskIDLE_PRIORITY, &stepperTask);
 
 	while (1) {
 		currentMillis = millis();
@@ -389,12 +422,18 @@ void app_main() {
 			}
 		}
 
-		if (currentMillis - lastMemoryReport >= 10000) {
+		if (currentMillis - lastMemoryReport >= 60000) {
 			lastMemoryReport = currentMillis;
 			strncpy(mqttMessage.topic, "/free_heap", sizeof("/free_heap"));
 			sprintf(mqttMessage.body, "%u", xPortGetFreeHeapSize());
 
 			publish_mqtt_message(mqttMessage);
+		}
+
+		if (currentMillis - lastTaskReport >= 60000) {
+			lastTaskReport = currentMillis;
+			eTaskState stepperTaskState = eTaskGetState(stepperTask);
+			ESP_LOGI(TAG, "The task state is: %s", task_state_to_string(stepperTaskState));
 		}
 
 		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
