@@ -35,6 +35,9 @@
 
 #include "cJSON.h"
 
+#include "stepper.h"
+#include "common.h"
+
 /*set the ssid and password via "make menuconfig"*/
 #define DEFAULT_SSID CONFIG_WIFI_SSID
 #define DEFAULT_PWD CONFIG_WIFI_PASSWORD
@@ -53,12 +56,17 @@
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
+#define LOW 0
+#define HIGH 1
+
 static const char *TAG = "power_save";
 static EventGroupHandle_t wifi_event_group;
 const static int CONNECTED_BIT = BIT0;
 
 // Throttle sensor reads to avoid polling too frequently
 const unsigned int MIN_SENSOR_READ_MILLIS = 2500;
+
+int pins[4] = { GPIO_NUM_17, GPIO_NUM_5, GPIO_NUM_18, GPIO_NUM_19 };
 
 typedef struct MqttMessage {
   char topic[128];
@@ -237,10 +245,6 @@ void start_up_stuff() {
 #endif // CONFIG_PM_ENABLE
 }
 
-unsigned long IRAM_ATTR millis() {
-	return (unsigned long) (esp_timer_get_time() / 1000ULL);
-}
-
 static void obtain_time(void) {
 	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
 	initialize_sntp();
@@ -288,6 +292,38 @@ void publish_mqtt_message(MqttMessage message) {
 	esp_mqtt_client_publish(client, message.topic, message.body, 0, 1, message.retained);
 }
 
+// Task to be created.
+void vTaskCode(void * pvParameters) {
+	unsigned long currentMillis;
+	unsigned long lastRotation = 0;
+	MqttMessage message;
+
+	cJSON * root = cJSON_CreateObject();
+	cJSON_AddItemToObject(root, "status", cJSON_CreateString("initialized"));
+
+	while (1) {
+		currentMillis = millis();
+		if (currentMillis - lastRotation >= 10000) {
+			lastRotation = currentMillis;
+
+
+			strncpy(message.topic, "/stepper", sizeof("/stepper"));
+			cJSON_ReplaceItemInObject(root, "status", cJSON_CreateString("turning"));
+			cJSON_PrintPreallocated(root, message.body, 128, false);
+			publish_mqtt_message(message);
+
+			rotate(pins);
+
+			strncpy(message.topic, "/stepper", sizeof("/stepper"));
+			cJSON_ReplaceItemInObject(root, "status", cJSON_CreateString("stopped"));
+			cJSON_PrintPreallocated(root, message.body, 128, false);
+			publish_mqtt_message(message);
+			delay(10 * 1000);
+			ESP_LOGI(TAG, "Delay over");
+		}
+	}
+}
+
 void app_main() {
 	ESP_LOGI(TAG, "[APP] Startup..");
 	ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
@@ -308,6 +344,8 @@ void app_main() {
 
 	struct tm timeinfo;
 
+	set_up(pins);
+
 	// Invoke initially to set up SNTP
 	get_time(&timeinfo);
 	char strftime_buf[64];
@@ -317,6 +355,9 @@ void app_main() {
 	unsigned long currentMillis;
 	unsigned long lastSensorReadMillis = 0;
 	unsigned long lastMemoryReport = 0;
+
+	xTaskCreate(vTaskCode, "ROTATE_EGGS", 4096, NULL, tskIDLE_PRIORITY, NULL);
+
 	while (1) {
 		currentMillis = millis();
 		if (currentMillis - lastSensorReadMillis >= MIN_SENSOR_READ_MILLIS) {
@@ -356,9 +397,10 @@ void app_main() {
 			publish_mqtt_message(mqttMessage);
 		}
 
-
 		TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;
 		TIMERG0.wdt_feed = 1;
 		TIMERG0.wdt_wprotect = 0;
 	}
+
+
 }

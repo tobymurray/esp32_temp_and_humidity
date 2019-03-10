@@ -8,8 +8,7 @@
 #include "freertos/task.h"
 #include "freertos/portmacro.h"
 #include "esp_log.h"
-
-#define NOP() asm volatile ("nop")
+#include "common.h"
 
 #define LOW 0
 #define HIGH 1
@@ -40,15 +39,6 @@ void pinModeInput(uint8_t pin) {
 	gpio_set_direction(pin, GPIO_MODE_INPUT);
 }
 
-/*
- * For some reason, gpio_config doesn't seem to work here. Interactions with the sensor start timing out.
- */
-void pinModeOutput(uint8_t pin) {
-	gpio_set_pull_mode(pin, GPIO_PULLUP_DISABLE);
-	gpio_set_pull_mode(pin, GPIO_PULLDOWN_ENABLE);
-	gpio_set_direction(pin, GPIO_MODE_OUTPUT);
-}
-
 void IRAM_ATTR digitalWrite(uint8_t pin, uint8_t val) {
 	if (val) {
 		if (pin < 32) {
@@ -74,32 +64,6 @@ int IRAM_ATTR digitalRead(uint8_t pin) {
 	return 0;
 }
 
-static unsigned long IRAM_ATTR millis() {
-	return (unsigned long) (esp_timer_get_time() / 1000ULL);
-}
-
-unsigned long IRAM_ATTR micros() {
-	return (unsigned long) (esp_timer_get_time());
-}
-
-void delay(uint32_t ms) {
-	vTaskDelay(ms / portTICK_PERIOD_MS);
-}
-
-void IRAM_ATTR delayMicroseconds(uint32_t us) {
-	uint32_t m = micros();
-	if (us) {
-		uint32_t e = (m + us);
-		if (m > e) { //overflow
-			while (micros() > e) {
-				NOP();
-			}
-		}
-		while (micros() < e) {
-			NOP();
-		}
-	}
-}
 
 Reading readPin(uint8_t pin) {
 	Reading reading;
